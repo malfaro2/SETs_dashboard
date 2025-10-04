@@ -1,0 +1,458 @@
+---
+title: "Course Evaluation Dashboard"
+format: 
+  dashboard:
+    orientation: columns
+    theme: cosmo
+    scrolling: true
+server: shiny
+---
+
+```{r}
+#| context: setup
+library(shiny)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(wordcloud)
+library(tm)
+library(RColorBrewer)
+library(plotly)
+library(DT)
+
+# Load your data
+source(file="read_data_save.R")
+```
+
+# Overview {data-icon="fa-chart-line"}
+
+## Column {width=230}
+
+### Filters
+
+```{r}
+selectInput("class_standing", "Class Standing:",
+            choices = c("All", "Freshman/first year", "Sophomore/second year", 
+                       "Junior/third year", "Senior/ fourth year", "Graduate"),
+            selected = "All")
+
+#selectInput("enrollment_type", "Enrollment Type:",
+#            choices = c("All", "System"),
+#            selected = "All")
+
+selectInput("attendance_filter", "Attendance:",
+            choices = c("All", "75-100%", "50-74%", "25-49%", "0-24%"),
+            selected = "All")
+```
+
+### Summary Statistics
+
+```{r}
+#| title: "Response Summary"
+tableOutput("summary_stats")
+```
+
+## Column {width=570}
+
+### Class Standing Distribution
+
+```{r}
+plotlyOutput("class_standing_plot", height = "350px")
+```
+
+### Attendance Distribution
+
+```{r}
+plotlyOutput("attendance_plot", height = "350px")
+```
+
+# Ratings {data-icon="fa-star"}
+
+## Column {.tabset}
+
+### Instructor Effectiveness
+
+```{r}
+plotlyOutput("effectiveness_plot", height = "500px")
+```
+
+### Engagement & Learning
+
+```{r}
+plotlyOutput("engagement_plot", height = "500px")
+```
+
+### Course Structure
+
+```{r}
+plotlyOutput("structure_plot", height = "500px")
+```
+
+### Comparative Analysis
+
+```{r}
+plotlyOutput("radar_plot", height = "500px")
+```
+
+# Crosstabs {data-icon="fa-table"}
+
+## Column {width=230}
+
+### Analysis Options
+
+```{r}
+selectInput("rating_var", "Select Rating Variable:",
+            choices = c("Time Effective" = "time_effective",
+                       "Explained Concepts" = "explained_concepts",
+                       "Useful Feedback" = "useful_feedback",
+                       "Grading Clear" = "grading_clear",
+                       "Felt Engaged" = "felt_engaged",
+                       "Lectures Structured" = "lectures_structured",
+                       "Activities Structured" = "activities_structured",
+                       "Homework Helpful" = "homework_helpful"))
+
+selectInput("student_var", "Select Student Variable:",
+            choices = c("Class Standing" = "class_standing",
+                       "Attendance" = "attendance_pct",
+                       "Hours per Week" = "hours_per_week",
+                       "Why Taking Course" = "why_taking",
+                       "Felt Prepared" = "felt_prepared"))
+```
+
+## Column {width=670}
+
+### Crosstabulation Table
+
+```{r}
+DTOutput("crosstab_table")
+```
+
+### Visualization
+
+```{r}
+plotlyOutput("crosstab_plot", height = "400px")
+```
+
+### Summary Statistics
+
+```{r}
+tableOutput("crosstab_summary")
+```
+
+# Raw Data {data-icon="fa-table"}
+
+## Column
+
+### Full Dataset
+
+```{r}
+DTOutput("raw_data_table")
+```
+
+```{r}
+#| context: server
+
+# Helper function to convert Likert scale to numeric
+likert_to_numeric <- function(x) {
+  case_when(
+    x == "Very frequently" ~ 5,
+    x == "Frequently" ~ 4,
+    x == "Somewhat frequently" ~ 3,
+    x == "Occasionally" ~ 2,
+    x == "Rarely" ~ 1,
+    x == "Unable to comment" ~ NA_real_,
+    TRUE ~ NA_real_
+  )
+}
+
+# Reactive data filtering
+filtered_data <- reactive({
+  df <- data
+  
+  # Apply filters
+  if(input$class_standing != "All") {
+    df <- df %>% filter(class_standing == input$class_standing)
+  }
+  
+#  if(input$enrollment_type != "All") {
+#    df <- df %>% filter(enrollment == input$enrollment_type)
+#  }
+  
+  # Filter by attendance (need to convert percentage ranges to numeric)
+  df <- df %>%
+    filter(attendance_pct %in% c("75-100%", "50-74%", "25-49%", "0-24%"))
+  
+  return(df)
+})
+
+# Summary statistics
+output$summary_stats <- renderTable({
+  df <- filtered_data()
+  
+  # Calculate actual statistics
+  total <- nrow(df)
+  
+  # Get most common attendance range
+  attendance_mode <- df %>%
+    count(attendance_pct) %>%
+    arrange(desc(n)) %>%
+    slice(1) %>%
+    pull(attendance_pct)
+  
+  # Get most common hours range
+  hours_mode <- df %>%
+    count(hours_per_week) %>%
+    arrange(desc(n)) %>%
+    slice(1) %>%
+    pull(hours_per_week)
+  
+  # Calculate average rating across key questions
+  df_ratings <- df %>%
+    mutate(across(c(time_effective, explained_concepts, felt_engaged), 
+                  likert_to_numeric)) %>%
+    rowwise() %>%
+    mutate(avg_rating = mean(c(time_effective, explained_concepts, felt_engaged), na.rm = TRUE))
+  
+  avg_rating <- round(mean(df_ratings$avg_rating, na.rm = TRUE), 1)
+  
+  data.frame(
+    Metric = c("Total Responses", "Most Common Attendance", "Most Common Hours/Week", "Avg Rating"),
+    Value = c(total, attendance_mode, hours_mode, avg_rating)
+  )
+})
+
+# Class standing plot
+output$class_standing_plot <- renderPlotly({
+  df <- filtered_data() %>%
+    count(class_standing) %>%
+    filter(!is.na(class_standing))
+  
+  plot_ly(df, x = ~class_standing, y = ~n, type = 'bar',
+          marker = list(color = 'steelblue')) %>%
+    layout(title = list(text = "Distribution by Class Standing", font = list(size = 14)),
+           xaxis = list(title = "Class Standing", tickangle = -45),
+           yaxis = list(title = "Number of Students"),
+           margin = list(l = 50, r = 20, t = 50, b = 100),
+           autosize = TRUE)
+})
+
+# Attendance plot
+output$attendance_plot <- renderPlotly({
+  df <- filtered_data() %>%
+    count(attendance_pct) %>%
+    filter(!is.na(attendance_pct))
+  
+  plot_ly(df, x = ~attendance_pct, y = ~n, type = 'bar',
+          marker = list(color = 'lightblue', line = list(color = 'darkblue', width = 1))) %>%
+    layout(title = list(text = "Attendance Distribution", font = list(size = 14)),
+           xaxis = list(title = "Attendance (%)"),
+           yaxis = list(title = "Count"),
+           margin = list(l = 50, r = 20, t = 50, b = 80),
+           autosize = TRUE)
+})
+
+# Instructor effectiveness
+output$effectiveness_plot <- renderPlotly({
+  df <- filtered_data() %>%
+    mutate(across(c(time_effective, explained_concepts, useful_feedback, grading_clear), 
+                  likert_to_numeric)) %>%
+    summarise(
+      time_effective = mean(time_effective, na.rm = TRUE),
+      explained_concepts = mean(explained_concepts, na.rm = TRUE),
+      useful_feedback = mean(useful_feedback, na.rm = TRUE),
+      grading_clear = mean(grading_clear, na.rm = TRUE)
+    ) %>%
+    pivot_longer(everything(), names_to = "Question", values_to = "Rating")
+  
+  df <- df %>%
+    mutate(Question = case_when(
+      Question == "time_effective" ~ "Used time effectively",
+      Question == "explained_concepts" ~ "Explained concepts",
+      Question == "useful_feedback" ~ "Provided feedback",
+      Question == "grading_clear" ~ "Communicated grading"
+    ))
+  
+  plot_ly(df, x = ~Question, y = ~Rating, type = 'bar',
+          marker = list(color = 'coral')) %>%
+    layout(title = list(text = "Instructor Effectiveness Ratings", font = list(size = 16)),
+           xaxis = list(title = "", tickangle = -30),
+           yaxis = list(title = "Average Rating (1-5)", range = c(0, 5)),
+           margin = list(l = 60, r = 40, t = 60, b = 100),
+           autosize = TRUE)
+})
+
+# Engagement plot
+output$engagement_plot <- renderPlotly({
+  df <- filtered_data() %>%
+    mutate(across(c(felt_engaged, lectures_structured, activities_structured), 
+                  likert_to_numeric)) %>%
+    summarise(
+      felt_engaged = mean(felt_engaged, na.rm = TRUE),
+      lectures_structured = mean(lectures_structured, na.rm = TRUE),
+      activities_structured = mean(activities_structured, na.rm = TRUE)
+    ) %>%
+    pivot_longer(everything(), names_to = "Aspect", values_to = "Rating")
+  
+  df <- df %>%
+    mutate(Aspect = case_when(
+      Aspect == "felt_engaged" ~ "Felt Engaged",
+      Aspect == "lectures_structured" ~ "Structured Lectures",
+      Aspect == "activities_structured" ~ "In-class Activities"
+    ))
+  
+  plot_ly(df, x = ~Aspect, y = ~Rating, type = 'bar',
+          marker = list(color = 'mediumseagreen')) %>%
+    layout(title = list(text = "Engagement & Learning", font = list(size = 16)),
+           xaxis = list(title = "", tickangle = -30),
+           yaxis = list(title = "Average Rating (1-5)", range = c(0, 5)),
+           margin = list(l = 60, r = 40, t = 60, b = 100),
+           autosize = TRUE)
+})
+
+# Structure plot
+output$structure_plot <- renderPlotly({
+  df <- filtered_data() %>%
+    mutate(homework_numeric = likert_to_numeric(homework_helpful)) %>%
+    summarise(
+      homework_helpful = mean(homework_numeric, na.rm = TRUE),
+      reading_useful = sum(reading_useful %in% c("I found the reading very useful", 
+                                                   "I found the reading somewhat useful"), 
+                           na.rm = TRUE) / n() * 5
+    ) %>%
+    pivot_longer(everything(), names_to = "Component", values_to = "Rating")
+  
+  df <- df %>%
+    mutate(Component = case_when(
+      Component == "homework_helpful" ~ "Homework Preparation",
+      Component == "reading_useful" ~ "Reading Usefulness"
+    ))
+  
+  plot_ly(df, x = ~Component, y = ~Rating, type = 'bar',
+          marker = list(color = 'mediumpurple')) %>%
+    layout(title = list(text = "Course Structure & Materials", font = list(size = 16)),
+           xaxis = list(title = ""),
+           yaxis = list(title = "Average Rating (1-5)", range = c(0, 5)),
+           margin = list(l = 60, r = 40, t = 60, b = 80),
+           autosize = TRUE)
+})
+
+# Radar plot
+output$radar_plot <- renderPlotly({
+  df <- filtered_data() %>%
+    mutate(across(c(time_effective, explained_concepts, useful_feedback, 
+                    grading_clear, felt_engaged, lectures_structured, 
+                    homework_helpful), likert_to_numeric)) %>%
+    summarise(
+      time_use = mean(time_effective, na.rm = TRUE),
+      explanation = mean(explained_concepts, na.rm = TRUE),
+      feedback = mean(useful_feedback, na.rm = TRUE),
+      grading = mean(grading_clear, na.rm = TRUE),
+      engagement = mean(felt_engaged, na.rm = TRUE),
+      structure = mean(lectures_structured, na.rm = TRUE),
+      materials = mean(homework_helpful, na.rm = TRUE)
+    )
+  
+  categories <- c("Time Use", "Explanation", "Feedback", "Grading", 
+                  "Engagement", "Structure", "Materials")
+  values <- as.numeric(df[1,])
+  
+  plot_ly(
+    type = 'scatterpolar',
+    r = values,
+    theta = categories,
+    fill = 'toself',
+    marker = list(color = 'steelblue')
+  ) %>%
+    layout(
+      polar = list(
+        radialaxis = list(
+          visible = TRUE,
+          range = c(0, 5)
+        )
+      ),
+      title = list(text = "Overall Course Rating Profile", font = list(size = 16)),
+      margin = list(l = 80, r = 80, t = 80, b = 80),
+      autosize = TRUE
+    )
+})
+
+# Crosstabulation table
+output$crosstab_table <- renderDT({
+  df <- filtered_data() %>%
+    mutate(rating_numeric = likert_to_numeric(.data[[input$rating_var]])) %>%
+    select(student_var = all_of(input$student_var), 
+           rating_var = all_of(input$rating_var),
+           rating_numeric)
+  
+  # Create frequency table
+  freq_table <- df %>%
+    count(student_var, rating_var) %>%
+    pivot_wider(names_from = rating_var, values_from = n, values_fill = 0) %>%
+    arrange(student_var)
+  
+  # Add row totals
+  freq_table <- freq_table %>%
+    mutate(Total = rowSums(select(., -student_var)))
+  
+  # Add column totals
+  totals_row <- freq_table %>%
+    summarise(across(where(is.numeric), sum)) %>%
+    mutate(student_var = "Total")
+  
+  freq_table <- bind_rows(freq_table, totals_row)
+  
+  freq_table
+}, options = list(pageLength = 15, scrollX = TRUE, dom = 't', autoWidth = TRUE))
+
+# Crosstab visualization
+output$crosstab_plot <- renderPlotly({
+  df <- filtered_data() %>%
+    mutate(rating_numeric = likert_to_numeric(.data[[input$rating_var]])) %>%
+    filter(!is.na(rating_numeric)) %>%
+    group_by(student_var = .data[[input$student_var]]) %>%
+    summarise(
+      mean_rating = mean(rating_numeric, na.rm = TRUE),
+      count = n(),
+      .groups = 'drop'
+    ) %>%
+    filter(!is.na(student_var))
+  
+  plot_ly(df, x = ~student_var, y = ~mean_rating, type = 'bar',
+          marker = list(color = 'steelblue'),
+          text = ~paste("Mean:", round(mean_rating, 2), "<br>N:", count),
+          hoverinfo = 'text') %>%
+    layout(
+      title = list(text = paste("Average", input$rating_var, "by", input$student_var), 
+                   font = list(size = 14)),
+      xaxis = list(title = input$student_var, tickangle = -30),
+      yaxis = list(title = "Average Rating", range = c(0, 5)),
+      showlegend = FALSE,
+      margin = list(l = 60, r = 40, t = 60, b = 120),
+      autosize = TRUE
+    )
+})
+
+# Crosstab summary statistics
+output$crosstab_summary <- renderTable({
+  df <- filtered_data() %>%
+    mutate(rating_numeric = likert_to_numeric(.data[[input$rating_var]])) %>%
+    filter(!is.na(rating_numeric)) %>%
+    group_by(student_var = .data[[input$student_var]]) %>%
+    summarise(
+      N = n(),
+      Mean = round(mean(rating_numeric, na.rm = TRUE), 2),
+      SD = round(sd(rating_numeric, na.rm = TRUE), 2),
+      Min = min(rating_numeric, na.rm = TRUE),
+      Max = max(rating_numeric, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    filter(!is.na(student_var))
+  
+  df
+}, striped = TRUE, hover = TRUE)
+
+# Raw data table
+output$raw_data_table <- renderDT({
+  filtered_data()
+}, options = list(pageLength = 25, scrollX = TRUE))
+```
