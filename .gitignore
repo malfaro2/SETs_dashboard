@@ -10,3 +10,4 @@
 *.log
 *.aux
 **/*_files/
+*.csv
